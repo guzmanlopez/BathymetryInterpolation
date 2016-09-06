@@ -1019,35 +1019,35 @@ startPointCell <- which(min(mergePartsSMP_edited@coords[,1]) == mergePartsSMP_ed
 plot(mergePartsSMP_edited, pch = 19, cex = 0.5, xlim = c(787961.8, (787961.8 + 500)))
 plot(mergePartsSMP_edited[startPointCell,], cex = 1.2, col = "red", add = TRUE)
 
-mergePartsSMP_Line <- MakeSpatialLineFromUnsortedSpatialPoints(spatialPointsObject = SpatialPoints(coords = mergePartsSMP_edited@coords, proj4string = CRS(epsg.32721)), startPointCell = startPointCell, projection = epsg.32721)
+thalwegLine <- MakeSpatialLineFromUnsortedSpatialPoints(spatialPointsObject = SpatialPoints(coords = mergePartsSMP_edited@coords, proj4string = CRS(epsg.32721)), startPointCell = startPointCell, projection = epsg.32721)
 
-mergePartsSMP_Line <- SpatialLinesDataFrame(sl = mergePartsSMP_Line, data = data.frame("ID" = 1))
+thalwegLine <- SpatialLinesDataFrame(sl = thalwegLine, data = data.frame("ID" = 1))
 
-plot(mergePartsSMP_Line)
+plot(thalwegLine)
 
 # 19) Export thalweg line to shapefile ------------------------------------
 
-writeOGR(obj = mergePartsSMP_Line, dsn = "/path/to/shapefile/thalweg-line", layer = "thalweg-line", driver = "ESRI Shapefile", overwrite_layer = TRUE)
+writeOGR(obj = thalwegLine, dsn = "/path/to/shapefile/thalweg-line", layer = "thalweg-line", driver = "ESRI Shapefile", overwrite_layer = TRUE)
 
 # 20) Write Spatial Object to PostGIS -------------------------------------
 
 # Add temporary unique ID to spatial DF
-mergePartsSMP_Line$spatial_id <- 1:nrow(mergePartsSMP_Line)
+thalwegLine$spatial_id <- 1:nrow(thalwegLine)
 
 # Set column names to lower case
-names(mergePartsSMP_Line) <- tolower(names(mergePartsSMP_Line))
+names(thalwegLine) <- tolower(names(thalwegLine))
 
-writeOGR(obj = mergePartsSMP_Line, layer = "thalwegline", driver = "PostgreSQL", dsn = dbString, layer_options = "geometry_name=geom", overwrite_layer = TRUE)
+writeOGR(obj = thalwegLine, layer = "thalwegline", driver = "PostgreSQL", dsn = dbString, layer_options = "geometry_name=geom", overwrite_layer = TRUE)
 
 # 21) Transform coordinates to Thalweg line -------------------------------
 
 riverdepthmargin <- readOGR(dsn = dbString, layer = "riverdepthmargin")
-mergePartsSMP_Line <- readOGR(dsn = dbString, layer = "thalwegline")
+thalwegLine <- readOGR(dsn = dbString, layer = "thalwegline")
 
 ### Find n
 
 # Nearest point to line from depth position points
-snapPointsToThalweg <- snapPointsToLines(points = riverdepthmargin[1:1000,], lines = mergePartsSMP_Line, withAttrs = TRUE)
+snapPointsToThalweg <- snapPointsToLines(points = riverdepthmargin[1:1000,], lines = thalwegLine, withAttrs = TRUE)
 
 # Minimum distance from line to depth position points
 n <- numeric()
@@ -1060,7 +1060,44 @@ for(i in 1:nrow(riverdepthmargin[1:500,])) {
 }
 
 
-#  ver acá cuando está a la derecha o a la izquierda, arriba o abajo para n < 0 o n 0
+# Subset points in one side or the other side of the line
+
+# Add offset (optionally)
+offsetX <- 0
+offsetY <- 20
+
+coordsSide1 <- rbind(c(bbox(thalwegLine)['x','max'] + offsetX, bbox(thalwegLine)['y','max'] + offsetY),
+                c(bbox(thalwegLine)['x','min'] - offsetX, bbox(thalwegLine)['y','max'] + offsetY),
+                as.data.frame(coordinates(thalwegLine))
+)
+
+coordsSide2 <- rbind(c(bbox(thalwegLine)['x','max'] + offsetX, bbox(thalwegLine)['y','min'] - offsetY),
+                 c(bbox(thalwegLine)['x','min'] - offsetX, bbox(thalwegLine)['y','min'] - offsetY),
+                 as.data.frame(coordinates(thalwegLine))
+)
+
+# Coords to SpatialPolygons objects
+polySide1 <- SpatialPolygons(Srl = list(Polygons(srl = list(Polygon(coords = coordsSide1)), ID = "1")), proj4string = CRS(epsg.32721))
+polySide2 <- SpatialPolygons(Srl = list(Polygons(srl = list(Polygon(coords = coordsSide2)), ID = "2")), proj4string = CRS(epsg.32721))
+
+# Subset SpatialPoints in Side1
+pointsInSide1 <- which(gIntersects(spgeom1 = polySide1, spgeom2 = riverdepthmargin, byid = TRUE))
+sampleSpatialPointsSide1 <- riverdepthmargin[pointsInSide1, ]
+
+# Subset SpatialPoints in Side2
+pointsInSide2 <- which(gIntersects(spgeom1 = polySide2, spgeom2 = riverdepthmargin, byid = TRUE))
+sampleSpatialPointsSide2 <- riverdepthmargin[pointsInSide2,]
+
+# Subset SpatialPoints over line
+pointsOverLine <- which(gIntersects(spgeom1 = thalwegLine, spgeom2 = riverdepthmargin, byid = TRUE))
+sampleSpatialPointsOverLine <- riverdepthmargin[pointsOverLine, ] # NULL
+
+# Plot
+plot(riverdepthmargin, pch = 19, cex = 0.4)
+plot(snapPointsToThalweg, col = "green", add = TRUE)
+plot(thalwegLine, col = "red", add = TRUE)
+plot(riverdepthmargin[pointsInSide1,], col = "blue", cex = 0.25, add = TRUE)
+plot(riverdepthmargin[pointsInSide2,], col = "cyan", cex = 0.25, add = TRUE)
 
 nMinus <- which((snapPointsToThalweg@coords[1:500, 1] - riverdepthmargin@coords[1:500, 1] ) < 0)
 n[nMinus] <- n[nMinus] * -1
@@ -1068,7 +1105,7 @@ n[nMinus] <- n[nMinus] * -1
 # Plot
 plot(riverdepthmargin[1:500,])
 plot(snapPointsToThalweg, col = "green", add = TRUE)
-plot(mergePartsSMP_Line, col = "red", add = TRUE)
+plot(thalwegLine, col = "red", add = TRUE)
 
 # Add n coordinates attribute to depth points
 riverdepthmargin$n <- n
@@ -1112,7 +1149,7 @@ s <- 0
 
 for(i in 1:nrow(snapPointsToThalweg)) {
 
-  s[i] <- lengthToPoint(spatialLinesObj = mergePartsSMP_Line, intersectionPoint = snapPointsToThalweg[i,], bufferWidth = 1)
+  s[i] <- lengthToPoint(spatialLinesObj = thalwegLine, intersectionPoint = snapPointsToThalweg[i,], bufferWidth = 1)
   cat(paste("\n Distance ", i, sep = ""))
 
 }
@@ -1186,28 +1223,28 @@ OrderPointsAlongLine <- function(spatialLinesObject, spatialPointsObject) {
 
 }
 
-orderedPoints <- OrderPointsAlongLine(spatialPointsObject = snapPointsToThalweg, spatialLinesObject = mergePartsSMP_Line)
+orderedPoints <- OrderPointsAlongLine(spatialPointsObject = snapPointsToThalweg, spatialLinesObject = thalwegLine)
 
 # Ordered points
 snapPointsToThalweg <- snapPointsToThalweg[orderedPoints$cell,]
 
 # Plot
 
-# plot(mergePartsSMP_Line, col = "green")
+# plot(thalwegLine, col = "green")
 # plot(snapPointsToThalweg, add = TRUE, pch = 19, cex = 0.5)
 # text(coordinates(snapPointsToThalweg), labels = seq_along(snapPointsToThalweg), cex = 0.75, pos = 1)
 # plot(snapPointsToThalweg[1,], add = TRUE, pch = 19, col = 'blue')
 # plot(nrow(snapPointsToThalweg), add = TRUE, pch = 19, col = 'blue')
 
 # SL <- SpatialLines(LinesList = list(Lines(slinelist = list(Line(coords = snapPointsToThalweg)), ID = "1")), proj4string = CRS(epsg.32721))
-# plot(mergePartsSMP_Line, col = "green")
+# plot(thalwegLine, col = "green")
 # plot(SL, col = "black", add = TRUE)
 
 SPdf <- as.data.frame(coordinates(snapPointsToThalweg))
 colnames(SPdf) <- c("x", "y")
 SPdf <- cbind(SPdf, snapPointsToThalweg@data)
 
-SLdf <- as.data.frame(coordinates(mergePartsSMP_Line))
+SLdf <- as.data.frame(coordinates(thalwegLine))
 colnames(SLdf) <- c("x", "y")
 auxDF <- snapPointsToThalweg@data[1:nrow(SLdf),]
 auxDF[1:nrow(SLdf),] <- NA
@@ -1217,12 +1254,12 @@ rBindDFs <- rbind(SPdf, SLdf)
 
 rBindDFsSP <- SpatialPointsDataFrame(coords = rBindDFs[,1:2], data = rBindDFs[,-(1:2)], proj4string = CRS(epsg.32721))
 
-system.time(orderPoints2 <-  OrderPointsAlongLine(spatialPointsObject = rBindDFsSP, spatialLinesObject = mergePartsSMP_Line))
+system.time(orderPoints2 <-  OrderPointsAlongLine(spatialPointsObject = rBindDFsSP, spatialLinesObject = thalwegLine))
 
 rBindDFsSP <- rBindDFsSP[orderPoints2$cell,]
 
 # SL <- SpatialLines(LinesList = list(Lines(slinelist = list(Line(coords = rBindDFsSP)), ID = "1")), proj4string = CRS(epsg.32721))
-# plot(mergePartsSMP_Line, col = "green")
+# plot(thalwegLine, col = "green")
 # plot(SL, col = "black", add = TRUE)
 
 s2 <- 0
