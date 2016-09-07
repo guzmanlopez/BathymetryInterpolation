@@ -1112,48 +1112,68 @@ riverdepthmargin$n <- n
 
 ### Find s
 
-# Function to calculate the distance between startpoint of a line and an intersecting point
-lengthToPoint <- function(spatialLinesObj, intersectionPoint, bufferWidth) {
+library(parallel)
 
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl <- makeCluster(no_cores)
+print(cl)
+
+x <- 1:nrow(snapPointsToThalweg)
+buffer <- 1
+
+# Function to calculate the distance between startpoint of a line and an intersecting point
+lengthToPoint <- function(spatialLinesObj = thalwegLine, intersectionPoint, bufferWidth = buffer) {
+  
   intersectionPointBuffer = gBuffer(spgeom = intersectionPoint, width = bufferWidth)
   intersectionPointCoordinates = intersectionPoint@coords
   lineCoordinates = spatialLinesObj@lines[[1]]@Lines[[1]]@coords
   numOfCoordinates = length(lineCoordinates[,1])
   calculatedLength = 0
-
+  
   # split line into segments
   for(i in 2:numOfCoordinates){
-
+    
     # create new spatiallines for the current segment and check if point is intersecting
     currentLine = SpatialLines(LinesList = list(Lines(slinelist = list(Line(coords = lineCoordinates[(i-1):i,])), ID = "1")), spatialLinesObj@proj4string)
-
+    
     # no intersection
     if(!gIntersects(currentLine, intersectionPointBuffer)) {
       calculatedLength = calculatedLength + gLength(spgeom = currentLine)
-
+      
       # intersection
     } else {
-
+      
       # create line from start of current segment to intersection point
       coordinates = matrix(data = c(lineCoordinates[i-1,], intersectionPointCoordinates), nrow = 2, byrow = T)
       lastLine = SpatialLines(LinesList = list(Lines(slinelist = list(Line(coords = coordinates)), ID = "1")), spatialLinesObj@proj4string)
       calculatedLength = calculatedLength + gLength(spgeom = lastLine)
-      print(paste("Found point on line segment", (i-1), "! Length from start point: ", calculatedLength))
+      
+      # print(paste("Found point on line segment", (i-1), "! Length from start point: ", calculatedLength))
+      
       return(calculatedLength)
     }
   }
   print("There was no intersection!")
 }
 
-s <- 0
+# Objects to export to clusters
+clusterExport(cl = cl, varlist = c("x", "thalwegLine", "buffer", "lengthToPoint", "snapPointsToThalweg"))
 
-for(i in 1:nrow(snapPointsToThalweg)) {
+# Libraries to be evaluated
+clusterEvalQ(cl = cl, expr = c(library('rgeos'), library('sp')))
 
-  s[i] <- lengthToPoint(spatialLinesObj = thalwegLine, intersectionPoint = snapPointsToThalweg[i,], bufferWidth = 1)
-  cat(paste("\n Distance ", i, sep = ""))
+system.time(
+  tryCatch(
+    models <- parSapply(cl = cl, X = x, FUN = function(x) lengthToPoint(intersectionPoint = snapPointsToThalweg[x,])),
+    error = function(e) print(e)
+    )
+  )
 
-}
-
+# Finish
+stopCluster(cl)
 
 norm_vec <- function(x) sqrt(sum(x^2))
 
